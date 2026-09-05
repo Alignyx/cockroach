@@ -3119,8 +3119,8 @@ project
 # TryDecorrelateLimitOne
 # --------------------------------------------------
 
-# With inner join.
-norm expect=TryDecorrelateLimitOne
+# The inner join's ON condition must remain above LIMIT 1.
+norm expect-not=TryDecorrelateLimitOne
 SELECT *
 FROM a
 WHERE EXISTS
@@ -3131,7 +3131,7 @@ WHERE EXISTS
     ON x=u
 )
 ----
-semi-join (hash)
+semi-join-apply
  ├── columns: k:1!null i:2 f:3 s:4 j:5
  ├── key: (1)
  ├── fd: (1)-->(2-5)
@@ -3140,21 +3140,38 @@ semi-join (hash)
  │    ├── key: (1)
  │    └── fd: (1)-->(2-5)
  ├── inner-join (hash)
- │    ├── columns: x:8!null u:12!null v:13
+ │    ├── columns: x:8!null u:12!null v:13!null
+ │    ├── outer: (2)
+ │    ├── cardinality: [0 - 1]
  │    ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
- │    ├── key: (12)
- │    ├── fd: (12)-->(13), (8)==(12), (12)==(8)
+ │    ├── key: ()
+ │    ├── fd: ()-->(8,12,13), (8)==(12), (12)==(8)
  │    ├── scan xy
  │    │    ├── columns: x:8!null
  │    │    └── key: (8)
- │    ├── scan uv
- │    │    ├── columns: u:12!null v:13
- │    │    ├── key: (12)
- │    │    └── fd: (12)-->(13)
+ │    ├── limit
+ │    │    ├── columns: u:12!null v:13!null
+ │    │    ├── outer: (2)
+ │    │    ├── cardinality: [0 - 1]
+ │    │    ├── key: ()
+ │    │    ├── fd: ()-->(12,13)
+ │    │    ├── select
+ │    │    │    ├── columns: u:12!null v:13!null
+ │    │    │    ├── outer: (2)
+ │    │    │    ├── key: (12)
+ │    │    │    ├── fd: ()-->(13)
+ │    │    │    ├── limit hint: 1.00
+ │    │    │    ├── scan uv
+ │    │    │    │    ├── columns: u:12!null v:13
+ │    │    │    │    ├── key: (12)
+ │    │    │    │    ├── fd: (12)-->(13)
+ │    │    │    │    └── limit hint: 1.01
+ │    │    │    └── filters
+ │    │    │         └── v:13 = i:2 [outer=(2,13), constraints=(/2: (/NULL - ]; /13: (/NULL - ]), fd=(2)==(13), (13)==(2)]
+ │    │    └── 1
  │    └── filters
  │         └── x:8 = u:12 [outer=(8,12), constraints=(/8: (/NULL - ]; /12: (/NULL - ]), fd=(8)==(12), (12)==(8)]
- └── filters
-      └── v:13 = i:2 [outer=(2,13), constraints=(/2: (/NULL - ]; /13: (/NULL - ]), fd=(2)==(13), (13)==(2)]
+ └── filters (true)
 
 # With left join.
 norm expect=TryDecorrelateLimitOne
@@ -3272,8 +3289,8 @@ project
            ├── y:9 = i:2 [outer=(2,9), constraints=(/2: (/NULL - ]; /9: (/NULL - ]), fd=(2)==(9), (9)==(2)]
            └── k:1 = x:8 [outer=(1,8), constraints=(/1: (/NULL - ]; /8: (/NULL - ]), fd=(1)==(8), (8)==(1)]
 
-# With inner join + ORDER BY.
-norm expect=TryDecorrelateLimitOne
+# The inner join's ON condition must also stay above an ordered LIMIT 1.
+norm expect-not=TryDecorrelateLimitOne
 SELECT
 (
     SELECT v
@@ -3286,39 +3303,54 @@ FROM xy
 ----
 project
  ├── columns: v:16
- ├── distinct-on
- │    ├── columns: x:1!null uv.v:6
- │    ├── grouping columns: x:1!null
+ ├── left-join-apply
+ │    ├── columns: x:1!null u:5 uv.v:6 k:9 i:10 f:11
  │    ├── key: (1)
- │    ├── fd: (1)-->(6)
- │    ├── left-join (hash)
- │    │    ├── columns: x:1!null u:5 uv.v:6 k:9 i:10
- │    │    ├── multiplicity: left-rows(one-or-more), right-rows(zero-or-one)
- │    │    ├── key: (1,9)
- │    │    ├── fd: (5)-->(6), (9)-->(10), (5)==(9), (9)==(5)
- │    │    ├── scan xy
- │    │    │    ├── columns: x:1!null
- │    │    │    └── key: (1)
- │    │    ├── inner-join (hash)
- │    │    │    ├── columns: u:5!null uv.v:6 k:9!null i:10
- │    │    │    ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
- │    │    │    ├── key: (9)
- │    │    │    ├── fd: (5)-->(6), (9)-->(10), (5)==(9), (9)==(5)
- │    │    │    ├── scan uv
- │    │    │    │    ├── columns: u:5!null uv.v:6
- │    │    │    │    ├── key: (5)
- │    │    │    │    └── fd: (5)-->(6)
- │    │    │    ├── scan a
- │    │    │    │    ├── columns: k:9!null i:10
+ │    ├── fd: (1)-->(5,6,9-11), (5)==(9), (9)==(5)
+ │    ├── scan xy
+ │    │    ├── columns: x:1!null
+ │    │    └── key: (1)
+ │    ├── inner-join (hash)
+ │    │    ├── columns: u:5!null uv.v:6 k:9!null i:10!null f:11
+ │    │    ├── outer: (1)
+ │    │    ├── cardinality: [0 - 1]
+ │    │    ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
+ │    │    ├── key: ()
+ │    │    ├── fd: ()-->(5,6,9-11), (5)==(9), (9)==(5)
+ │    │    ├── scan uv
+ │    │    │    ├── columns: u:5!null uv.v:6
+ │    │    │    ├── key: (5)
+ │    │    │    └── fd: (5)-->(6)
+ │    │    ├── limit
+ │    │    │    ├── columns: k:9!null i:10!null f:11
+ │    │    │    ├── internal-ordering: +11 opt(10)
+ │    │    │    ├── outer: (1)
+ │    │    │    ├── cardinality: [0 - 1]
+ │    │    │    ├── key: ()
+ │    │    │    ├── fd: ()-->(9-11)
+ │    │    │    ├── select
+ │    │    │    │    ├── columns: k:9!null i:10!null f:11
+ │    │    │    │    ├── outer: (1)
  │    │    │    │    ├── key: (9)
- │    │    │    │    └── fd: (9)-->(10)
- │    │    │    └── filters
- │    │    │         └── u:5 = k:9 [outer=(5,9), constraints=(/5: (/NULL - ]; /9: (/NULL - ]), fd=(5)==(9), (9)==(5)]
+ │    │    │    │    ├── fd: ()-->(10), (9)-->(11)
+ │    │    │    │    ├── ordering: +11 opt(10) [actual: +11]
+ │    │    │    │    ├── limit hint: 1.00
+ │    │    │    │    ├── sort
+ │    │    │    │    │    ├── columns: k:9!null i:10 f:11
+ │    │    │    │    │    ├── key: (9)
+ │    │    │    │    │    ├── fd: (9)-->(10,11)
+ │    │    │    │    │    ├── ordering: +11 opt(10) [actual: +11]
+ │    │    │    │    │    ├── limit hint: 1.01
+ │    │    │    │    │    └── scan a
+ │    │    │    │    │         ├── columns: k:9!null i:10 f:11
+ │    │    │    │    │         ├── key: (9)
+ │    │    │    │    │         └── fd: (9)-->(10,11)
+ │    │    │    │    └── filters
+ │    │    │    │         └── i:10 = x:1 [outer=(1,10), constraints=(/1: (/NULL - ]; /10: (/NULL - ]), fd=(1)==(10), (10)==(1)]
+ │    │    │    └── 1
  │    │    └── filters
- │    │         └── i:10 = x:1 [outer=(1,10), constraints=(/1: (/NULL - ]; /10: (/NULL - ]), fd=(1)==(10), (10)==(1)]
- │    └── aggregations
- │         └── first-agg [as=uv.v:6, outer=(6)]
- │              └── uv.v:6
+ │    │         └── u:5 = k:9 [outer=(5,9), constraints=(/5: (/NULL - ]; /9: (/NULL - ]), fd=(5)==(9), (9)==(5)]
+ │    └── filters (true)
  └── projections
       └── uv.v:6 [as=v:16, outer=(6)]
 
@@ -3518,7 +3550,7 @@ WHERE EXISTS
     ON x=u
 )
 ----
-semi-join (hash)
+semi-join-apply
  ├── columns: k:1!null i:2 f:3 s:4 j:5
  ├── key: (1)
  ├── fd: (1)-->(2-5)
@@ -3527,21 +3559,38 @@ semi-join (hash)
  │    ├── key: (1)
  │    └── fd: (1)-->(2-5)
  ├── inner-join (hash)
- │    ├── columns: x:8!null u:12!null v:13
+ │    ├── columns: x:8!null u:12!null v:13!null
+ │    ├── outer: (2)
+ │    ├── cardinality: [0 - 1]
  │    ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
- │    ├── key: (12)
- │    ├── fd: (12)-->(13), (8)==(12), (12)==(8)
+ │    ├── key: ()
+ │    ├── fd: ()-->(8,12,13), (8)==(12), (12)==(8)
  │    ├── scan xy
  │    │    ├── columns: x:8!null
  │    │    └── key: (8)
- │    ├── scan uv
- │    │    ├── columns: u:12!null v:13
- │    │    ├── key: (12)
- │    │    └── fd: (12)-->(13)
+ │    ├── limit
+ │    │    ├── columns: u:12!null v:13!null
+ │    │    ├── outer: (2)
+ │    │    ├── cardinality: [0 - 1]
+ │    │    ├── key: ()
+ │    │    ├── fd: ()-->(12,13)
+ │    │    ├── select
+ │    │    │    ├── columns: u:12!null v:13!null
+ │    │    │    ├── outer: (2)
+ │    │    │    ├── key: (12)
+ │    │    │    ├── fd: ()-->(13)
+ │    │    │    ├── limit hint: 1.00
+ │    │    │    ├── scan uv
+ │    │    │    │    ├── columns: u:12!null v:13
+ │    │    │    │    ├── key: (12)
+ │    │    │    │    ├── fd: (12)-->(13)
+ │    │    │    │    └── limit hint: 1.01
+ │    │    │    └── filters
+ │    │    │         └── v:13 = i:2 [outer=(2,13), constraints=(/2: (/NULL - ]; /13: (/NULL - ]), fd=(2)==(13), (13)==(2)]
+ │    │    └── 1
  │    └── filters
  │         └── x:8 = u:12 [outer=(8,12), constraints=(/8: (/NULL - ]; /12: (/NULL - ]), fd=(8)==(12), (12)==(8)]
- └── filters
-      └── v:13 = i:2 [outer=(2,13), constraints=(/2: (/NULL - ]; /13: (/NULL - ]), fd=(2)==(13), (13)==(2)]
+ └── filters (true)
 
 # No-op because there is no correlation.
 norm expect-not=TryDecorrelateLimit

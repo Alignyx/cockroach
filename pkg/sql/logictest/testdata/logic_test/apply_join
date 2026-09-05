@@ -804,4 +804,59 @@ SELECT * FROM t INNER JOIN LATERAL (
 statement ok
 RESET testing_optimizer_disable_rule_probability;
 
+subtest regression_151609
+
+# Apply ON only after the lateral input selects its newest eligible row.
+statement ok
+CREATE TABLE lateral_a (shard INT, id STRING, ts DATE, PRIMARY KEY (shard, id));
+CREATE TABLE lateral_b (shard INT, id STRING, ts DATE, PRIMARY KEY (shard, id));
+INSERT INTO lateral_a VALUES (2, '2', '2025-08-07');
+INSERT INTO lateral_b VALUES (2, '2', '2025-08-05'), (3, '3', '2025-08-06');
+
+query ITTT
+SELECT a.shard, a.id, b.id, b.ts::STRING
+FROM lateral_a a LEFT JOIN LATERAL (
+  SELECT * FROM lateral_b b WHERE b.ts < a.ts ORDER BY b.ts DESC LIMIT 1
+) b ON b.id = a.id ORDER BY a.shard;
+----
+2  2  NULL  NULL
+
+# Matching newest rows and empty candidate sets must retain their behavior.
+statement ok
+INSERT INTO lateral_a VALUES
+  (3, '3', '2025-08-07'), (4, '2', '2025-08-06'), (5, '4', '2025-08-05');
+
+query ITTT
+SELECT a.shard, a.id, b.id, b.ts::STRING
+FROM lateral_a a LEFT JOIN LATERAL (
+  SELECT * FROM lateral_b b WHERE b.ts < a.ts ORDER BY b.ts DESC LIMIT 1
+) b ON b.id = a.id ORDER BY a.shard;
+----
+2  2  NULL  NULL
+3  3  3     2025-08-06
+4  2  2     2025-08-05
+5  4  NULL  NULL
+
+# An unconditional lateral join can still use the LIMIT 1 decorrelation rule.
+query ITT
+SELECT a.shard, b.id, b.ts::STRING
+FROM lateral_a a LEFT JOIN LATERAL (
+  SELECT * FROM lateral_b b WHERE b.ts < a.ts ORDER BY b.ts DESC LIMIT 1
+) b ON true ORDER BY a.shard;
+----
+2  3     2025-08-06
+3  3     2025-08-06
+4  2     2025-08-05
+5  NULL  NULL
+
+# Inner joins must also test the chosen row, without substituting an older one.
+query ITT
+SELECT a.shard, b.id, b.ts::STRING
+FROM lateral_a a INNER JOIN LATERAL (
+  SELECT * FROM lateral_b b WHERE b.ts < a.ts ORDER BY b.ts DESC LIMIT 1
+) b ON b.id = a.id ORDER BY a.shard;
+----
+3  3  2025-08-06
+4  2  2025-08-05
+
 subtest end

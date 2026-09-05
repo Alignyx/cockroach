@@ -717,6 +717,10 @@
 # functionally dependent on the grouped key columns (and are therefore constant
 # in each group).
 #
+# The ON condition must be true. Moving a non-true filter below the DistinctOn
+# would choose the first row satisfying that filter, rather than test the row
+# chosen by LIMIT 1. A left join must null-extend when that chosen row fails ON.
+#
 # TODO(andyk): Add other join types.
 [TryDecorrelateLimitOne, Normalize]
 (InnerJoin | InnerJoinApply | LeftJoin | LeftJoinApply
@@ -724,14 +728,14 @@
     $right:* &
         (HasOuterCols $right) &
         (Limit $input:* (Const 1) $ordering:*)
-    $on:*
+    []
     $private:*
 )
 =>
 (Project
     # Needed to project away any columns added by EnsureKey.
     (DistinctOn
-        ((OpName) $newLeft:(EnsureKey $left) $input $on $private)
+        ((OpName) $newLeft:(EnsureKey $left) $input [] $private)
         (MakeAggCols2
             ConstAgg
             (NonKeyCols $newLeft)
