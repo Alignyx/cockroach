@@ -2111,3 +2111,76 @@ SELECT jsonb_path_query('{"LIKE_REGEx": 1}'::JSONB, '$.LIKE_REGEx'::JSONPATH);
 query T
 SELECT jsonb_path_query('{"LIKE_REGEx": 1}'::JSONB, '$.LIKE_REGEX'::JSONPATH);
 ----
+
+subtest regression_154589
+
+# A missing lax member and an empty array both yield no predicate matches.
+statement ok
+CREATE TABLE regex_empty (id INT PRIMARY KEY, j JSONB);
+
+statement ok
+INSERT INTO regex_empty VALUES
+  (1, '{"a": "b"}'),
+  (2, '[1, 2, 3, 4, "foo"]'),
+  (3, '{"a": {"b": "c", "d": "e"}}'),
+  (4, '{"a": {"b": [1, 2, 3, 4]}}'),
+  (5, '{"a": {}}'),
+  (6, '{"a": {"b": {"c": "d"}, "d": "e"}}'),
+  (7, '{"a": [{"b": {"x": "y"}}, {"b": "e"}]}'),
+  (8, '{"a": [{"b": []}]}'),
+  (9, '{"a": {"b": "c"}}'),
+  (10, '{"a": {"d": "e"}}'),
+  (11, '{"a": {"b": [null, "hi"]}}'),
+  (12, '{"a": {"b": [["hi"]]}}');
+
+query IT
+SELECT id, jsonb_path_query(j, '$.a.b like_regex "hi.*"') FROM regex_empty ORDER BY id;
+----
+1   false
+2   false
+3   false
+4   null
+5   false
+6   null
+7   null
+8   false
+9   false
+10  false
+11  true
+12  null
+
+# Guarding the predicate with existence preserves its three-valued result.
+query I
+SELECT count(*) FROM regex_empty
+WHERE jsonb_path_query_first(j, '$.a.b like_regex "hi.*"')
+  IS DISTINCT FROM jsonb_path_query_first(j, 'exists($.a.b) && ($.a.b like_regex "hi.*")');
+----
+0
+
+# Both comparison operands and the starts-with input use the empty-sequence rule.
+query TTT
+SELECT jsonb_path_query('{}', '$.missing == 1'),
+       jsonb_path_query('{}', '1 == $.missing'),
+       jsonb_path_query('{}', '$.missing starts with "hi"');
+----
+false  false  false
+
+# Predicate errors remain unknown even when the caller requests silent evaluation.
+# A valid empty sequence in strict mode still has no matches.
+query IT
+SELECT n, jsonb_path_query('{}', p::JSONPATH, '{}', true)
+FROM (VALUES
+  (1, 'strict $.missing like_regex "hi.*"'),
+  (2, '(0 / 0) < 1'),
+  (3, '1 < (0 / 0)'),
+  (4, '$.missing < (0 / 0)'),
+  (5, 'strict $ ? (false == true) like_regex "hi.*"'),
+  (6, '(+"hi") like_regex "hi.*"')
+) AS t(n, p) ORDER BY n;
+----
+1  null
+2  null
+3  null
+4  null
+5  false
+6  null
